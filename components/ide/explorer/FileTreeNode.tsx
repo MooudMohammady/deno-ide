@@ -34,10 +34,12 @@ export default function FileTreeNode({
   const isDir = node.type === "directory";
   const isActive = node.id === activeFileId;
 
-  const handleClick = () => {
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
     if (isDir) {
       setExpanded((e) => !e);
     } else {
+      console.log("File clicked:", node.id, node.name);
       onFileClick(node);
     }
   };

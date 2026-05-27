@@ -16,6 +16,7 @@ import ExtensionMarketplace from "./extensions/ExtensionMarketplace";
 import { useExtensions } from "./extensions/useExtensions";
 import GitPanel from "./git/GitPanel";
 import { useGit } from "./git/useGit";
+import MenuBar from "./MenuBar";
 import SettingsPanel from "./settings/SettingsPanel";
 import { useIDESettings } from "./settings/useIDESettings";
 import TerminalPanel from "./terminal/TerminalPanel";
@@ -42,12 +43,15 @@ export default function IDELayout({ initialSettings: _initialSettings }: IDELayo
   const { layout, theme } = ideSettings;
   const isDark = theme === "dark";
 
-  const { root, fileMap, getContent, updateContent, createFile, deleteFile, renameFile } =
+  // Use real file system with server-side API
+  const { root, fileMap, getContent, updateContent, createFile, deleteFile, renameFile, uploadFiles } =
     useFileSystem();
 
   const { state: editorState, openFile, closeFile, updateEditorState } = useEditorState();
 
   const [dirtyFiles, setDirtyFiles] = useState<Record<string, boolean>>({});
+  const [fileContents, setFileContents] = useState<Record<string, string>>({});
+  const [loadingContent, setLoadingContent] = useState<boolean>(false);
 
   // Extensions
   const { extensions, install, uninstall, toggle: toggleExt } = useExtensions();
@@ -75,13 +79,34 @@ export default function IDELayout({ initialSettings: _initialSettings }: IDELayo
   } = useDebugger();
 
   const handleFileOpen = (node: FileNode) => {
-    if (node.type === "file") openFile(node.id);
+    if (node.type === "file") {
+      console.log("Opening file:", node.id, node.name);
+      openFile(node.id);
+      
+      // Load file content asynchronously
+      if (!fileContents[node.id]) {
+        setLoadingContent(true);
+        getContent(node.id)
+          .then(content => {
+            setFileContents(prev => ({ ...prev, [node.id]: content }));
+          })
+          .catch(error => {
+            console.error('Error loading file content:', error);
+            setFileContents(prev => ({ ...prev, [node.id]: '' }));
+          })
+          .finally(() => {
+            setLoadingContent(false);
+          });
+      }
+    }
   };
 
   const handleEditorChange = (value: string) => {
     if (editorState.activeFileId) {
       updateContent(editorState.activeFileId, value);
       setDirtyFiles((prev) => ({ ...prev, [editorState.activeFileId!]: true }));
+      // Update local content cache
+      setFileContents(prev => ({ ...prev, [editorState.activeFileId!]: value }));
       // Debounced lint on change
       debouncedLint(editorState.activeFileId, value, activeLanguage);
     }
@@ -119,19 +144,66 @@ export default function IDELayout({ initialSettings: _initialSettings }: IDELayo
   }, [layout.showTerminal, layout.showSidebar, updateLayout]);
 
   const activeFile = editorState.activeFileId ? fileMap[editorState.activeFileId] : null;
-  const activeContent = editorState.activeFileId ? getContent(editorState.activeFileId) : "";
+  const activeContent = editorState.activeFileId ? fileContents[editorState.activeFileId] || '' : '';
   const activeLanguage = activeFile ? detectLanguage(activeFile.name) : "plaintext";
 
   return (
     <div className={`flex flex-col h-screen w-screen overflow-hidden ${isDark ? "bg-[#1e1e1e] text-zinc-100" : "bg-white text-zinc-900"}`}>
-      <div className={`flex items-center justify-between px-4 h-9 shrink-0 text-xs select-none ${isDark ? "bg-[#323233] border-b border-[#3c3c3c]" : "bg-zinc-100 border-b border-zinc-300"}`}>
-        <span className="font-semibold tracking-wide">Web IDE</span>
-        <div className="flex gap-3">
-          <button onClick={toggleSidebar} className="opacity-70 hover:opacity-100 transition-opacity" aria-label="Toggle sidebar">☰</button>
-          <button onClick={toggleTerminal} className="opacity-70 hover:opacity-100 transition-opacity" aria-label="Toggle terminal">⌨</button>
-          <button onClick={toggleDebugPanel} className="opacity-70 hover:opacity-100 transition-opacity" aria-label="Toggle debug panel">🐛</button>
-        </div>
-      </div>
+      <MenuBar
+        theme={theme}
+        onToggleSidebar={toggleSidebar}
+        onToggleTerminal={toggleTerminal}
+        onToggleDebugPanel={toggleDebugPanel}
+        onNewFile={() => {
+          if (root) {
+            createFile(root.path, "newfile.ts", "file").then(file => {
+              if (file) {
+                openFile(file.id);
+              }
+            });
+          }
+        }}
+        onOpenFile={() => {
+          // Simulate file open dialog
+          console.log("Open file dialog");
+        }}
+        onSaveFile={() => {
+          if (editorState.activeFileId) {
+            setDirtyFiles((prev) => ({ ...prev, [editorState.activeFileId!]: false }));
+            console.log("File saved:", editorState.activeFileId);
+          }
+        }}
+        onSaveAll={() => {
+          setDirtyFiles({});
+          console.log("All files saved");
+        }}
+        onCloseFile={() => {
+          if (editorState.activeFileId) {
+            closeFile(editorState.activeFileId);
+          }
+        }}
+        onCloseAll={() => {
+          editorState.openFiles.forEach((fileId) => closeFile(fileId));
+        }}
+        onUndo={() => console.log("Undo")}
+        onRedo={() => console.log("Redo")}
+        onCut={() => console.log("Cut")}
+        onCopy={() => console.log("Copy")}
+        onPaste={() => console.log("Paste")}
+        onFind={() => console.log("Find")}
+        onReplace={() => console.log("Replace")}
+        onRun={() => startSession()}
+        onDebug={() => startSession()}
+        onStop={() => stopSession()}
+        onNewTerminal={() => {
+          // This would be handled by TerminalPanel's newSession
+          console.log("New terminal");
+        }}
+        onSplitTerminal={() => console.log("Split terminal")}
+        onClearTerminal={() => console.log("Clear terminal")}
+        onAbout={() => alert("Web IDE v0.1.0\nA web-based IDE built with Next.js")}
+        onDocumentation={() => window.open("https://github.com/your-repo/web-ide", "_blank")}
+      />
 
       <div className="flex flex-1 overflow-hidden">
         {layout.showSidebar && (
@@ -176,6 +248,7 @@ export default function IDELayout({ initialSettings: _initialSettings }: IDELayo
                 onFileCreate={(parentPath, name, type) => createFile(parentPath, name, type)}
                 onFileDelete={deleteFile}
                 onFileRename={renameFile}
+                onFilesUploaded={uploadFiles}
               />
             ) : sidebarView === "extensions" ? (
               <ExtensionMarketplace
@@ -263,7 +336,7 @@ export default function IDELayout({ initialSettings: _initialSettings }: IDELayo
               </div>
               <div className="flex-1 overflow-hidden">
                 {bottomTab === "terminal" ? (
-                  <TerminalPanel theme={theme} />
+                  <TerminalPanel theme={theme} projectId="default" />
                 ) : (
                   <ProblemsPanel
                     diagnostics={lintDiagnostics}

@@ -56,6 +56,16 @@ export function useTerminal() {
     );
   }, []);
 
+  const updateHistory = useCallback((sessionId: string, newHistory: string[]) => {
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id === sessionId
+          ? { ...s, history: newHistory }
+          : s
+      )
+    );
+  }, []);
+
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
 
   return {
@@ -66,5 +76,6 @@ export function useTerminal() {
     newSession,
     closeSession,
     appendHistory,
+    updateHistory,
   };
 }

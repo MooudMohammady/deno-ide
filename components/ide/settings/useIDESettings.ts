@@ -13,7 +13,7 @@ const defaultSettings: IDESettings = {
   minimap: true,
   layout: {
     sidebarWidth: 240,
-    terminalHeight: 200,
+    terminalHeight: 300,
     showSidebar: true,
     showTerminal: true,
     showDebugPanel: false,

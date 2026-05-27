@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import FileUploader from "../FileUploader";
 import type { FileNode } from "../types";
 import FileTreeNode from "./FileTreeNode";
 
@@ -12,6 +13,8 @@ export interface FileExplorerProps {
   onFileCreate: (parentPath: string, name: string, type: "file" | "directory") => void;
   onFileDelete: (node: FileNode) => void;
   onFileRename: (node: FileNode, newName: string) => void;
+  onFilesUploaded?: (files: Array<{ name: string; content: string; type: string }>) => void;
+  onFolderUploaded?: (folderName: string, files: Array<{ path: string; name: string; content: string; type: string }>) => void;
 }
 
 export default function FileExplorer({
@@ -22,6 +25,8 @@ export default function FileExplorer({
   onFileCreate,
   onFileDelete,
   onFileRename,
+  onFilesUploaded,
+  onFolderUploaded,
 }: FileExplorerProps) {
   const isDark = theme === "dark";
   const [pendingCreate, setPendingCreate] = useState<{
@@ -29,6 +34,7 @@ export default function FileExplorer({
     type: "file" | "directory";
   } | null>(null);
   const [newName, setNewName] = useState("");
+  const [view, setView] = useState<"explorer" | "upload">("explorer");
 
   const handleCreateFile = (parentPath: string) => {
     setPendingCreate({ parentPath, type: "file" });
@@ -59,10 +65,28 @@ export default function FileExplorer({
       <div
         className={`flex items-center justify-between px-3 py-1.5 shrink-0 ${isDark ? "border-b border-[#3c3c3c]" : "border-b border-zinc-200"}`}
       >
-        <span className="text-xs font-semibold uppercase tracking-widest opacity-60">
-          Explorer
-        </span>
-        {root && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-widest opacity-60">
+            {view === "explorer" ? "Explorer" : "Upload"}
+          </span>
+          <div className="flex text-xs">
+            <button
+              onClick={() => setView("explorer")}
+              className={`px-2 py-0.5 ${view === "explorer" ? (isDark ? "bg-[#3c3c3c] text-zinc-100" : "bg-zinc-200 text-zinc-900") : "opacity-50 hover:opacity-80"}`}
+              aria-label="Explorer view"
+            >
+              📁
+            </button>
+            <button
+              onClick={() => setView("upload")}
+              className={`px-2 py-0.5 ${view === "upload" ? (isDark ? "bg-[#3c3c3c] text-zinc-100" : "bg-zinc-200 text-zinc-900") : "opacity-50 hover:opacity-80"}`}
+              aria-label="Upload view"
+            >
+              ⬆
+            </button>
+          </div>
+        </div>
+        {root && view === "explorer" && (
           <div className="flex gap-1">
             <button
               onClick={() => handleCreateFile(root.path)}
@@ -85,7 +109,7 @@ export default function FileExplorer({
       </div>
 
       {/* Inline create input */}
-      {pendingCreate && (
+      {pendingCreate && view === "explorer" && (
         <div className="px-3 py-1">
           <input
             autoFocus
@@ -106,24 +130,32 @@ export default function FileExplorer({
         </div>
       )}
 
-      {/* Tree */}
+      {/* Main content */}
       <div className="flex-1 overflow-y-auto">
-        {root ? (
-          <FileTreeNode
-            node={root}
-            depth={0}
-            activeFileId={activeFileId}
-            isDark={isDark}
-            onFileClick={onFileOpen}
-            onRename={onFileRename}
-            onDelete={onFileDelete}
-            onCreateFile={handleCreateFile}
-            onCreateFolder={handleCreateFolder}
-          />
+        {view === "explorer" ? (
+          root ? (
+            <FileTreeNode
+              node={root}
+              depth={0}
+              activeFileId={activeFileId}
+              isDark={isDark}
+              onFileClick={onFileOpen}
+              onRename={onFileRename}
+              onDelete={onFileDelete}
+              onCreateFile={handleCreateFile}
+              onCreateFolder={handleCreateFolder}
+            />
+          ) : (
+            <div className="px-3 py-2 text-xs opacity-40 italic">
+              No folder open
+            </div>
+          )
         ) : (
-          <div className="px-3 py-2 text-xs opacity-40 italic">
-            No folder open
-          </div>
+          <FileUploader
+            theme={theme}
+            onFilesUploaded={onFilesUploaded || (() => {})}
+            onFolderUploaded={onFolderUploaded}
+          />
         )}
       </div>
     </div>
