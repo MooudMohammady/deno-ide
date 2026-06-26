@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import type { FileNode } from "../types";
 
 interface FileSystemResponse {
@@ -13,6 +13,45 @@ interface FileSystemResponse {
   lastModified: string;
 }
 
+function convertToFileNode(
+  data: FileSystemResponse,
+  setContents: Dispatch<SetStateAction<Record<string, string>>>
+): FileNode {
+  const nodeId = `node-${data.path.replace(/\//g, '-')}`;
+  const node: FileNode = {
+    id: nodeId,
+    name: data.name,
+    path: data.path,
+    type: data.type,
+    size: data.size,
+    lastModified: new Date(data.lastModified)
+  };
+
+  if (data.type === 'directory' && data.children) {
+    node.children = data.children.map((child) => convertToFileNode(child, setContents));
+  }
+
+  if (data.type === 'file' && data.content !== undefined) {
+    setContents((prev) => ({ ...prev, [nodeId]: data.content || '' }));
+  }
+
+  return node;
+}
+
+function buildFileMapFromRoot(node: FileNode): Record<string, FileNode> {
+  const map: Record<string, FileNode> = {};
+
+  const walk = (current: FileNode) => {
+    map[current.id] = current;
+    if (current.children) {
+      current.children.forEach(walk);
+    }
+  };
+
+  walk(node);
+  return map;
+}
+
 /**
  * React hook for managing file system with server-side API
  * Requirements: 2.3, 2.4, 2.5
@@ -23,45 +62,6 @@ export function useFileSystem(projectId: string = 'default') {
   const [contents, setContents] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Convert API response to FileNode
-  const convertToFileNode = (data: FileSystemResponse, parentPath: string = ''): FileNode => {
-    const nodeId = `node-${data.path.replace(/\//g, '-')}`;
-    const node: FileNode = {
-      id: nodeId,
-      name: data.name,
-      path: data.path,
-      type: data.type,
-      size: data.size,
-      lastModified: new Date(data.lastModified)
-    };
-
-    if (data.type === 'directory' && data.children) {
-      node.children = data.children.map(child => convertToFileNode(child, data.path));
-    }
-
-    // Store content if it's a file
-    if (data.type === 'file' && data.content !== undefined) {
-      setContents(prev => ({ ...prev, [nodeId]: data.content || '' }));
-    }
-
-    return node;
-  };
-
-  // Build file map from root
-  const buildFileMapFromRoot = (node: FileNode): Record<string, FileNode> => {
-    const map: Record<string, FileNode> = {};
-    
-    const walk = (current: FileNode) => {
-      map[current.id] = current;
-      if (current.children) {
-        current.children.forEach(walk);
-      }
-    };
-    
-    walk(node);
-    return map;
-  };
 
   // Load file system from server
   const loadFileSystem = useCallback(async (path: string = '/') => {
@@ -76,13 +76,14 @@ export function useFileSystem(projectId: string = 'default') {
       }
       
       const data: FileSystemResponse = await response.json();
-      const fileNode = convertToFileNode(data);
+      const fileNode = convertToFileNode(data, setContents);
       
       setRoot(fileNode);
       setFileMap(buildFileMapFromRoot(fileNode));
       return fileNode;
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown file system error";
+      setError(message);
       console.error('Error loading file system:', err);
       return null;
     } finally {
@@ -92,7 +93,10 @@ export function useFileSystem(projectId: string = 'default') {
 
   // Load initial file system
   useEffect(() => {
-    loadFileSystem();
+    const timer = setTimeout(() => {
+      void loadFileSystem();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [loadFileSystem]);
 
   // Create file on server
@@ -132,8 +136,9 @@ export function useFileSystem(projectId: string = 'default') {
       }
 
       return tempNode;
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : `Error creating ${type}`;
+      setError(message);
       console.error(`Error creating ${type}:`, err);
       return null;
     }
@@ -165,8 +170,9 @@ export function useFileSystem(projectId: string = 'default') {
         delete next[node.id];
         return next;
       });
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Error deleting file";
+      setError(message);
       console.error('Error deleting file:', err);
     }
   }, [projectId, loadFileSystem]);
@@ -191,8 +197,9 @@ export function useFileSystem(projectId: string = 'default') {
 
       // Reload the file system
       await loadFileSystem();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Error renaming file";
+      setError(message);
       console.error('Error renaming file:', err);
     }
   }, [projectId, loadFileSystem]);
@@ -222,8 +229,9 @@ export function useFileSystem(projectId: string = 'default') {
 
       // Update local content
       setContents(prev => ({ ...prev, [fileId]: content }));
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Error updating file content";
+      setError(message);
       console.error('Error updating file content:', err);
     }
   }, [projectId, fileMap]);
@@ -260,7 +268,7 @@ export function useFileSystem(projectId: string = 'default') {
       setContents(prev => ({ ...prev, [fileId]: content }));
       
       return content;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error getting file content:', err);
       return '';
     }
@@ -292,10 +300,37 @@ export function useFileSystem(projectId: string = 'default') {
       } else {
         throw new Error('Some files failed to upload');
       }
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Error uploading files";
+      setError(message);
       console.error('Error uploading files:', err);
-      return { success: false, error: err.message };
+      return { success: false, error: message };
+    }
+  }, [projectId, loadFileSystem]);
+
+  const importFiles = useCallback(async (files: Array<{ path: string; name: string; content: string; type: string }>) => {
+    try {
+      const response = await fetch('/api/files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'importFiles',
+          projectId,
+          files,
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to import files');
+      }
+
+      const fileNode = await loadFileSystem();
+      return { success: true, root: fileNode };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown import error';
+      setError(message);
+      console.error('Error importing files:', err);
+      return { success: false, error: message };
     }
   }, [projectId, loadFileSystem]);
 
@@ -311,6 +346,7 @@ export function useFileSystem(projectId: string = 'default') {
     updateContent,
     getContent,
     uploadFiles,
+    importFiles,
     loadFileSystem
   };
 }

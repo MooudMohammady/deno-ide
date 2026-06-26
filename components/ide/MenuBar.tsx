@@ -9,6 +9,7 @@ interface MenuBarProps {
   onToggleDebugPanel: () => void;
   onNewFile?: () => void;
   onOpenFile?: () => void;
+  onOpenFolder?: () => void;
   onSaveFile?: () => void;
   onSaveAll?: () => void;
   onCloseFile?: () => void;
@@ -44,6 +45,7 @@ export default function MenuBar({
   onToggleDebugPanel,
   onNewFile,
   onOpenFile,
+  onOpenFolder,
   onSaveFile,
   onSaveAll,
   onCloseFile,
@@ -73,6 +75,7 @@ export default function MenuBar({
       items: [
         { label: "New File", shortcut: "Ctrl+N", action: onNewFile },
         { label: "Open File...", shortcut: "Ctrl+O", action: onOpenFile },
+        { label: "Open Folder...", shortcut: "Ctrl+K Ctrl+O", action: onOpenFolder },
         { label: "Save", shortcut: "Ctrl+S", action: onSaveFile },
         { label: "Save All", shortcut: "Ctrl+Shift+S", action: onSaveAll },
         { type: "separator" },
@@ -184,7 +187,7 @@ export default function MenuBar({
                         <button
                           key={index}
                           onClick={() => handleItemClick(item.action)}
-                          className={`flex items-center justify-between w-full px-3 py-1.5 text-left hover:${isDark ? "bg-[#094771]" : "bg-blue-100"} ${isDark ? "text-zinc-200" : "text-zinc-900"}`}
+                          className={`flex items-center justify-between w-full px-3 py-1.5 text-left ${isDark ? "hover:bg-[#094771]" : "hover:bg-blue-100"} ${isDark ? "text-zinc-200" : "text-zinc-900"}`}
                           disabled={!item.action}
                         >
                           <span>{item.label}</span>

@@ -2,7 +2,7 @@
 
 import { debounce } from "@/lib/debounce";
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import ProblemsPanel from "./analysis/ProblemsPanel";
 import { useLinting } from "./analysis/useLinting";
 import DebugPanel from "./debugger/DebugPanel";
@@ -24,11 +24,85 @@ import type { FileNode } from "./types";
 
 const CodeEditor = dynamic(() => import("./editor/CodeEditor"), { ssr: false });
 
+type LocalHandleMap = Record<string, FileSystemFileHandle>;
+type LocalDirectoryHandleMap = Record<string, FileSystemDirectoryHandle>;
+type LocalWorkspace = {
+  root: FileNode;
+  fileMap: Record<string, FileNode>;
+  handleMap: LocalHandleMap;
+  dirHandleMap: LocalDirectoryHandleMap;
+};
+
+async function readFileAsText(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+}
+
+async function buildLocalWorkspace(
+  handle: FileSystemDirectoryHandle,
+  parentPath = ""
+): Promise<LocalWorkspace> {
+  const rootPath = parentPath ? `${parentPath}/${handle.name}` : handle.name;
+  const root: FileNode = {
+    id: `local-${rootPath.replace(/\//g, "-")}`,
+    name: handle.name,
+    path: rootPath,
+    type: "directory",
+    children: [],
+  };
+
+  const fileMap: Record<string, FileNode> = { [root.id]: root };
+  const handleMap: LocalHandleMap = {};
+  const dirHandleMap: LocalDirectoryHandleMap = { [root.id]: handle };
+
+  const walk = async (dirHandle: FileSystemDirectoryHandle, dirNode: FileNode, basePath: string) => {
+    for await (const [entryName, entryHandle] of dirHandle.entries()) {
+      const entryPath = basePath ? `${basePath}/${entryName}` : entryName;
+      if (entryHandle.kind === "directory") {
+        const childDir: FileNode = {
+          id: `local-${entryPath.replace(/\//g, "-")}`,
+          name: entryName,
+          path: entryPath,
+          type: "directory",
+          children: [],
+        };
+        dirNode.children = dirNode.children ?? [];
+        dirNode.children.push(childDir);
+        fileMap[childDir.id] = childDir;
+        dirHandleMap[childDir.id] = entryHandle;
+        await walk(entryHandle, childDir, entryPath);
+      } else {
+        const fileNode: FileNode = {
+          id: `local-${entryPath.replace(/\//g, "-")}`,
+          name: entryName,
+          path: entryPath,
+          type: "file",
+        };
+        dirNode.children = dirNode.children ?? [];
+        dirNode.children.push(fileNode);
+        fileMap[fileNode.id] = fileNode;
+        handleMap[fileNode.id] = entryHandle;
+      }
+    }
+  };
+
+  await walk(handle, root, handle.name);
+  return { root, fileMap, handleMap, dirHandleMap };
+}
+
+function normalizeProjectPath(parentPath: string, name: string) {
+  return `${parentPath}/${name}`.replace(/\/+/g, "/").replace(/^\/+/, "");
+}
+
 interface IDELayoutProps {
   initialSettings?: Partial<import("./types").IDESettings>;
 }
 
-export default function IDELayout({ initialSettings: _initialSettings }: IDELayoutProps) {
+export default function IDELayout({}: IDELayoutProps) {
   const {
     settings: ideSettings,
     setTheme,
@@ -44,14 +118,16 @@ export default function IDELayout({ initialSettings: _initialSettings }: IDELayo
   const isDark = theme === "dark";
 
   // Use real file system with server-side API
-  const { root, fileMap, getContent, updateContent, createFile, deleteFile, renameFile, uploadFiles } =
+  const { root, fileMap, getContent, updateContent, createFile, deleteFile, renameFile } =
     useFileSystem();
 
   const { state: editorState, openFile, closeFile, updateEditorState } = useEditorState();
 
   const [dirtyFiles, setDirtyFiles] = useState<Record<string, boolean>>({});
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
-  const [loadingContent, setLoadingContent] = useState<boolean>(false);
+  const [localWorkspace, setLocalWorkspace] = useState<LocalWorkspace | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   // Extensions
   const { extensions, install, uninstall, toggle: toggleExt } = useExtensions();
@@ -78,24 +154,29 @@ export default function IDELayout({ initialSettings: _initialSettings }: IDELayo
     toggleBreakpoint,
   } = useDebugger();
 
-  const handleFileOpen = (node: FileNode) => {
+  const displayRoot = localWorkspace?.root ?? root;
+  const displayFileMap = localWorkspace?.fileMap ?? fileMap;
+
+  const handleFileOpen = async (node: FileNode) => {
     if (node.type === "file") {
       console.log("Opening file:", node.id, node.name);
       openFile(node.id);
       
-      // Load file content asynchronously
+      if (localWorkspace?.handleMap[node.id]) {
+        const file = await localWorkspace.handleMap[node.id].getFile();
+        const content = await file.text();
+        setFileContents((prev) => ({ ...prev, [node.id]: content }));
+        return;
+      }
+
       if (!fileContents[node.id]) {
-        setLoadingContent(true);
         getContent(node.id)
-          .then(content => {
-            setFileContents(prev => ({ ...prev, [node.id]: content }));
+          .then((content) => {
+            setFileContents((prev) => ({ ...prev, [node.id]: content }));
           })
-          .catch(error => {
-            console.error('Error loading file content:', error);
-            setFileContents(prev => ({ ...prev, [node.id]: '' }));
-          })
-          .finally(() => {
-            setLoadingContent(false);
+          .catch((error) => {
+            console.error("Error loading file content:", error);
+            setFileContents((prev) => ({ ...prev, [node.id]: "" }));
           });
       }
     }
@@ -103,10 +184,11 @@ export default function IDELayout({ initialSettings: _initialSettings }: IDELayo
 
   const handleEditorChange = (value: string) => {
     if (editorState.activeFileId) {
-      updateContent(editorState.activeFileId, value);
+      if (!localWorkspace?.fileMap[editorState.activeFileId]) {
+        updateContent(editorState.activeFileId, value);
+      }
       setDirtyFiles((prev) => ({ ...prev, [editorState.activeFileId!]: true }));
-      // Update local content cache
-      setFileContents(prev => ({ ...prev, [editorState.activeFileId!]: value }));
+      setFileContents((prev) => ({ ...prev, [editorState.activeFileId!]: value }));
       // Debounced lint on change
       debouncedLint(editorState.activeFileId, value, activeLanguage);
     }
@@ -143,9 +225,213 @@ export default function IDELayout({ initialSettings: _initialSettings }: IDELayo
     return () => window.removeEventListener("keydown", handler);
   }, [layout.showTerminal, layout.showSidebar, updateLayout]);
 
-  const activeFile = editorState.activeFileId ? fileMap[editorState.activeFileId] : null;
+  const activeFile = editorState.activeFileId ? displayFileMap[editorState.activeFileId] : null;
   const activeContent = editorState.activeFileId ? fileContents[editorState.activeFileId] || '' : '';
   const activeLanguage = activeFile ? detectLanguage(activeFile.name) : "plaintext";
+  const terminalWorkingDirectory = displayRoot?.path || root?.path || "/";
+
+  const handleOpenFile = () => fileInputRef.current?.click();
+  const handleOpenFolder = async () => {
+    if ("showDirectoryPicker" in window) {
+      const dirHandle = await window.showDirectoryPicker();
+      const workspace = await buildLocalWorkspace(dirHandle);
+      setLocalWorkspace(workspace);
+      setFileContents({});
+      setDirtyFiles({});
+      return;
+    }
+    folderInputRef.current?.click();
+  };
+
+  const handleSaveFile = async () => {
+    const fileId = editorState.activeFileId;
+    if (!fileId) return;
+
+    const content = fileContents[fileId] ?? "";
+    if (localWorkspace?.handleMap[fileId]) {
+      const writable = await localWorkspace.handleMap[fileId].createWritable();
+      await writable.write(content);
+      await writable.close();
+    } else {
+      await updateContent(fileId, content);
+    }
+
+    setDirtyFiles((prev) => ({ ...prev, [fileId]: false }));
+  };
+
+  const handleSaveAll = async () => {
+    const dirtyIds = Object.entries(dirtyFiles)
+      .filter(([, dirty]) => dirty)
+      .map(([fileId]) => fileId);
+
+    for (const fileId of dirtyIds) {
+      const content = fileContents[fileId] ?? "";
+      if (localWorkspace?.handleMap[fileId]) {
+        const writable = await localWorkspace.handleMap[fileId].createWritable();
+        await writable.write(content);
+        await writable.close();
+      } else {
+        await updateContent(fileId, content);
+      }
+    }
+
+    setDirtyFiles({});
+  };
+
+  const createLocalEntry = async (parentPath: string, name: string, type: "file" | "directory") => {
+    if (!localWorkspace) return;
+
+    const parentDirId = Object.keys(localWorkspace.dirHandleMap).find((id) => {
+      const node = localWorkspace.fileMap[id];
+      return node?.path === parentPath;
+    });
+    if (!parentDirId) {
+      throw new Error(`Parent folder not found: ${parentPath}`);
+    }
+
+    const parentHandle = localWorkspace.dirHandleMap[parentDirId];
+    if (!parentHandle) {
+      throw new Error(`No directory handle available for: ${parentPath}`);
+    }
+
+    if (type === "file") {
+      const fileHandle = await parentHandle.getFileHandle(name, { create: true });
+      const fileId = `local-${normalizeProjectPath(parentPath, name).replace(/\//g, "-")}`;
+      const fileNode: FileNode = {
+        id: fileId,
+        name,
+        path: normalizeProjectPath(parentPath, name),
+        type: "file",
+      };
+
+      const fileMap = { ...localWorkspace.fileMap, [fileId]: fileNode };
+      const handleMap = { ...localWorkspace.handleMap, [fileId]: fileHandle };
+      const root = structuredClone(localWorkspace.root);
+      const insertIntoTree = (node: FileNode): boolean => {
+        if (node.path === parentPath && node.type === "directory") {
+          node.children = node.children ?? [];
+          node.children.push(fileNode);
+          return true;
+        }
+        return node.children?.some(insertIntoTree) ?? false;
+      };
+      insertIntoTree(root);
+      setLocalWorkspace({ ...localWorkspace, root, fileMap, handleMap });
+      setFileContents((prev) => ({ ...prev, [fileId]: "" }));
+      return fileNode;
+    }
+
+    const dirHandle = await parentHandle.getDirectoryHandle(name, { create: true });
+    const dirId = `local-${normalizeProjectPath(parentPath, name).replace(/\//g, "-")}`;
+    const dirNode: FileNode = {
+      id: dirId,
+      name,
+      path: normalizeProjectPath(parentPath, name),
+      type: "directory",
+      children: [],
+    };
+
+    const fileMap = { ...localWorkspace.fileMap, [dirId]: dirNode };
+    const dirHandleMap = { ...localWorkspace.dirHandleMap, [dirId]: dirHandle };
+    const root = structuredClone(localWorkspace.root);
+    const insertIntoTree = (node: FileNode): boolean => {
+      if (node.path === parentPath && node.type === "directory") {
+        node.children = node.children ?? [];
+        node.children.push(dirNode);
+        return true;
+      }
+      return node.children?.some(insertIntoTree) ?? false;
+    };
+    insertIntoTree(root);
+    setLocalWorkspace({ ...localWorkspace, root, fileMap, dirHandleMap });
+    return dirNode;
+  };
+
+  const handleOpenFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    const content = await readFileAsText(file);
+    const node: FileNode = {
+      id: `local-${file.name.replace(/\//g, "-")}`,
+      name: file.name,
+      path: file.name,
+      type: "file",
+    };
+    setLocalWorkspace({
+      root: {
+        id: "local-root",
+        name: file.name,
+        path: file.name,
+        type: "directory",
+        children: [node],
+      },
+      fileMap: { [node.id]: node, "local-root": {
+        id: "local-root",
+        name: file.name,
+        path: file.name,
+        type: "directory",
+        children: [node],
+      } },
+      handleMap: {},
+      dirHandleMap: {},
+    });
+    setFileContents((prev) => ({ ...prev, [node.id]: content }));
+    openFile(node.id);
+  };
+
+  const handleOpenFolderChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (files.length === 0) return;
+    const folderName = files[0].webkitRelativePath.split("/")[0] || files[0].name || "Folder";
+    const treeRoot: FileNode = {
+      id: `local-${folderName.replace(/\s+/g, "-")}`,
+      name: folderName,
+      path: folderName,
+      type: "directory",
+      children: [],
+    };
+    const fileMapOverride: Record<string, FileNode> = { [treeRoot.id]: treeRoot };
+    for (const file of files) {
+      const relativePath = file.webkitRelativePath || file.name;
+      const parts = relativePath.split("/").filter(Boolean);
+      const fileName = parts.pop() ?? file.name;
+      let current = treeRoot;
+      let currentPath = folderName;
+      for (const part of parts) {
+        currentPath = `${currentPath}/${part}`;
+        let existing = current.children?.find((child) => child.name === part && child.type === "directory");
+        if (!existing) {
+          existing = {
+            id: `local-${currentPath.replace(/\//g, "-")}`,
+            name: part,
+            path: currentPath,
+            type: "directory",
+            children: [],
+          };
+          current.children = current.children ?? [];
+          current.children.push(existing);
+          fileMapOverride[existing.id] = existing;
+        }
+        current = existing;
+      }
+      const fileNode: FileNode = {
+        id: `local-${relativePath.replace(/\//g, "-")}`,
+        name: fileName,
+        path: relativePath,
+        type: "file",
+      };
+      current.children = current.children ?? [];
+      current.children.push(fileNode);
+      fileMapOverride[fileNode.id] = fileNode;
+      const content = await readFileAsText(file);
+      setFileContents((prev) => ({ ...prev, [fileNode.id]: content }));
+    }
+
+    setLocalWorkspace({ root: treeRoot, fileMap: fileMapOverride, handleMap: {}, dirHandleMap: {} });
+  };
 
   return (
     <div className={`flex flex-col h-screen w-screen overflow-hidden ${isDark ? "bg-[#1e1e1e] text-zinc-100" : "bg-white text-zinc-900"}`}>
@@ -163,20 +449,10 @@ export default function IDELayout({ initialSettings: _initialSettings }: IDELayo
             });
           }
         }}
-        onOpenFile={() => {
-          // Simulate file open dialog
-          console.log("Open file dialog");
-        }}
-        onSaveFile={() => {
-          if (editorState.activeFileId) {
-            setDirtyFiles((prev) => ({ ...prev, [editorState.activeFileId!]: false }));
-            console.log("File saved:", editorState.activeFileId);
-          }
-        }}
-        onSaveAll={() => {
-          setDirtyFiles({});
-          console.log("All files saved");
-        }}
+        onOpenFile={handleOpenFile}
+        onOpenFolder={handleOpenFolder}
+        onSaveFile={handleSaveFile}
+        onSaveAll={handleSaveAll}
         onCloseFile={() => {
           if (editorState.activeFileId) {
             closeFile(editorState.activeFileId);
@@ -241,14 +517,23 @@ export default function IDELayout({ initialSettings: _initialSettings }: IDELayo
             </div>
             {sidebarView === "explorer" ? (
               <FileExplorer
-                root={root}
+                root={displayRoot}
                 activeFileId={editorState.activeFileId}
                 theme={theme}
                 onFileOpen={handleFileOpen}
-                onFileCreate={(parentPath, name, type) => createFile(parentPath, name, type)}
-                onFileDelete={deleteFile}
-                onFileRename={renameFile}
-                onFilesUploaded={uploadFiles}
+                onFileCreate={(parentPath, name, type) => {
+                  if (localWorkspace) {
+                    void createLocalEntry(parentPath, name, type);
+                    return;
+                  }
+                  createFile(parentPath, name, type);
+                }}
+                onFileDelete={(node) => {
+                  if (!localWorkspace) deleteFile(node);
+                }}
+                onFileRename={(node, newName) => {
+                  if (!localWorkspace) renameFile(node, newName);
+                }}
               />
             ) : sidebarView === "extensions" ? (
               <ExtensionMarketplace
@@ -336,11 +621,11 @@ export default function IDELayout({ initialSettings: _initialSettings }: IDELayo
               </div>
               <div className="flex-1 overflow-hidden">
                 {bottomTab === "terminal" ? (
-                  <TerminalPanel theme={theme} projectId="default" />
+                  <TerminalPanel theme={theme} projectId="default" workingDirectory={terminalWorkingDirectory} />
                 ) : (
                   <ProblemsPanel
                     diagnostics={lintDiagnostics}
-                    fileMap={fileMap}
+                    fileMap={displayFileMap}
                     theme={theme}
                   />
                 )}
@@ -365,6 +650,22 @@ export default function IDELayout({ initialSettings: _initialSettings }: IDELayo
           </aside>
         )}
       </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        onChange={handleOpenFileChange}
+      />
+      <input
+        ref={folderInputRef}
+        type="file"
+        className="hidden"
+        multiple
+        // @ts-expect-error webkitdirectory is non-standard but supported in Chromium-based browsers
+        webkitdirectory="true"
+        onChange={handleOpenFolderChange}
+      />
 
       <div className={`flex items-center px-4 h-6 shrink-0 text-xs select-none gap-4 ${isDark ? "bg-[#007acc] text-white" : "bg-blue-600 text-white"}`} aria-label="Status bar">
         <span>Web IDE</span>

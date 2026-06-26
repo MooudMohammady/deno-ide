@@ -11,6 +11,16 @@ const mkdir = promisify(fs.mkdir);
 const unlink = promisify(fs.unlink);
 const rmdir = promisify(fs.rmdir);
 
+type FileTreeResponse = {
+  type: 'file' | 'directory';
+  name: string;
+  path: string;
+  content?: string;
+  children?: FileTreeResponse[];
+  size: number;
+  lastModified: string;
+};
+
 // Base directory for projects (in development, use current directory)
 const BASE_DIR = process.cwd();
 const PROJECTS_DIR = path.join(BASE_DIR, 'projects');
@@ -18,6 +28,45 @@ const PROJECTS_DIR = path.join(BASE_DIR, 'projects');
 // Ensure projects directory exists
 if (!fs.existsSync(PROJECTS_DIR)) {
   fs.mkdirSync(PROJECTS_DIR, { recursive: true });
+}
+
+async function readDirectoryTree(fullPath: string, relativePath: string): Promise<FileTreeResponse> {
+  const stats = await stat(fullPath);
+
+  if (stats.isDirectory()) {
+    const files = await readdir(fullPath);
+    const children = await Promise.all(
+      files.map(async (file) => {
+        const childFullPath = path.join(fullPath, file);
+        const childRelativePath = path.join(relativePath, file).replace(/\\/g, '/');
+        return readDirectoryTree(childFullPath, childRelativePath);
+      })
+    );
+
+    return {
+      type: 'directory',
+      name: path.basename(fullPath),
+      path: relativePath || '/',
+      children,
+      size: stats.size,
+      lastModified: stats.mtime.toISOString()
+    };
+  }
+
+  const content = await readFile(fullPath, 'utf-8');
+  return {
+    type: 'file',
+    name: path.basename(fullPath),
+    path: relativePath || path.basename(fullPath),
+    content,
+    size: stats.size,
+    lastModified: stats.mtime.toISOString()
+  };
+}
+
+function normalizeRelativePath(input: string | undefined, fallbackName: string) {
+  const raw = String(input || fallbackName || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  return raw;
 }
 
 export async function GET(request: NextRequest) {
@@ -48,48 +97,12 @@ export async function GET(request: NextRequest) {
       );
     }
     
-    const stats = await stat(fullPath);
-    
-    if (stats.isDirectory()) {
-      const files = await readdir(fullPath);
-      const children = await Promise.all(
-        files.map(async (file) => {
-          const childPath = path.join(fullPath, file);
-          const childStats = await stat(childPath);
-          return {
-            type: childStats.isDirectory() ? 'directory' : 'file',
-            name: file,
-            path: path.join(filePath, file).replace(/\\/g, '/'),
-            size: childStats.size,
-            lastModified: childStats.mtime.toISOString()
-          };
-        })
-      );
-      
-      return NextResponse.json({
-        type: 'directory',
-        name: path.basename(fullPath),
-        path: filePath,
-        children,
-        size: stats.size,
-        lastModified: stats.mtime.toISOString()
-      });
-    } else {
-      // It's a file, read its content
-      const content = await readFile(fullPath, 'utf-8');
-      return NextResponse.json({
-        type: 'file',
-        name: path.basename(fullPath),
-        path: filePath,
-        content,
-        size: stats.size,
-        lastModified: stats.mtime.toISOString()
-      });
-    }
-  } catch (error: any) {
+    return NextResponse.json(await readDirectoryTree(fullPath, filePath));
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown file system error';
     console.error('File system error:', error);
     return NextResponse.json(
-      { error: error.message },
+      { error: message },
       { status: 500 }
     );
   }
@@ -242,42 +255,44 @@ This is a sample project for the Web IDE.
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action, projectId = 'default', path: filePath, content, newName } = body;
+    const { action, projectId = 'default', path: filePath, content, newName, files } = body;
     
     const projectDir = path.join(PROJECTS_DIR, projectId);
-    const fullPath = path.join(projectDir, filePath);
     
     switch (action) {
       case 'createFile':
+        const fullCreatePath = path.join(projectDir, normalizeRelativePath(filePath, 'newfile'));
         // Ensure parent directory exists
-        const parentDir = path.dirname(fullPath);
+        const parentDir = path.dirname(fullCreatePath);
         if (!fs.existsSync(parentDir)) {
           await mkdir(parentDir, { recursive: true });
         }
         
-        await writeFile(fullPath, content || '', 'utf-8');
+        await writeFile(fullCreatePath, content || '', 'utf-8');
         return NextResponse.json({ success: true });
         
       case 'createDirectory':
-        await mkdir(fullPath, { recursive: true });
+        await mkdir(path.join(projectDir, normalizeRelativePath(filePath, 'new-folder')), { recursive: true });
         return NextResponse.json({ success: true });
         
       case 'updateFile':
-        await writeFile(fullPath, content, 'utf-8');
+        await writeFile(path.join(projectDir, normalizeRelativePath(filePath, 'file')), content, 'utf-8');
         return NextResponse.json({ success: true });
         
       case 'delete':
-        const stats = await stat(fullPath);
+        const fullDeletePath = path.join(projectDir, normalizeRelativePath(filePath, 'file'));
+        const stats = await stat(fullDeletePath);
         if (stats.isDirectory()) {
-          await rmdir(fullPath, { recursive: true });
+          await rmdir(fullDeletePath, { recursive: true });
         } else {
-          await unlink(fullPath);
+          await unlink(fullDeletePath);
         }
         return NextResponse.json({ success: true });
         
       case 'rename':
-        const newPath = path.join(path.dirname(fullPath), newName);
-        fs.renameSync(fullPath, newPath);
+        const renamePath = path.join(projectDir, normalizeRelativePath(filePath, 'file'));
+        const newPath = path.join(path.dirname(renamePath), newName);
+        fs.renameSync(renamePath, newPath);
         return NextResponse.json({ success: true });
         
       case 'upload':
@@ -290,17 +305,35 @@ export async function POST(request: NextRequest) {
         const uploadPath = path.join(uploadDir, path.basename(filePath));
         await writeFile(uploadPath, content, 'utf-8');
         return NextResponse.json({ success: true, path: uploadPath });
-        
+
+      case 'importFiles':
+        if (!Array.isArray(files) || files.length === 0) {
+          return NextResponse.json({ error: 'No files provided' }, { status: 400 });
+        }
+
+        for (const item of files) {
+          const relative = String(item.path || item.name || '').replace(/\\/g, '/').replace(/^\/+/, '');
+          const destination = path.join(projectDir, relative);
+          const destinationDir = path.dirname(destination);
+          if (!fs.existsSync(destinationDir)) {
+            await mkdir(destinationDir, { recursive: true });
+          }
+          await writeFile(destination, String(item.content || ''), 'utf-8');
+        }
+
+        return NextResponse.json({ success: true });
+      
       default:
         return NextResponse.json(
           { error: 'Invalid action' },
           { status: 400 }
         );
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown file system operation error';
     console.error('File system operation error:', error);
     return NextResponse.json(
-      { error: error.message },
+      { error: message },
       { status: 500 }
     );
   }

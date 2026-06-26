@@ -29,7 +29,6 @@ export default function FileTreeNode({
   const [expanded, setExpanded] = useState(true);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(node.name);
-  const [contextMenu, setContextMenu] = useState(false);
 
   const isDir = node.type === "directory";
   const isActive = node.id === activeFileId;
@@ -52,11 +51,6 @@ export default function FileTreeNode({
     setRenaming(false);
   };
 
-  const handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setContextMenu((v) => !v);
-  };
-
   const indent = depth * 12;
 
   return (
@@ -73,7 +67,6 @@ export default function FileTreeNode({
               : "hover:bg-zinc-100 text-zinc-700"
         }`}
         onClick={handleClick}
-        onContextMenu={handleContextMenu}
         role={isDir ? "treeitem" : "option"}
         aria-expanded={isDir ? expanded : undefined}
         aria-selected={isActive}

@@ -95,11 +95,21 @@ async function executeShellCommand(command: string, workingDir: string): Promise
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { command, projectId = 'default', filePath, code } = body;
+    const { command, projectId = 'default', cwd } = body;
     
     const BASE_DIR = process.cwd();
     const PROJECTS_DIR = path.join(BASE_DIR, 'projects');
     const projectDir = path.join(PROJECTS_DIR, projectId);
+    const requestedCwd = typeof cwd === 'string' && cwd.trim() ? cwd.trim() : projectDir;
+    const workingDir = path.isAbsolute(requestedCwd)
+      ? requestedCwd
+      : path.join(projectDir, requestedCwd);
+
+    const resolvedProjectDir = path.resolve(projectDir);
+    const resolvedWorkingDir = path.resolve(workingDir);
+    const safeWorkingDir = resolvedWorkingDir.startsWith(resolvedProjectDir)
+      ? resolvedWorkingDir
+      : resolvedProjectDir;
     
     // Ensure project directory exists
     if (!(await exists(projectDir))) {
@@ -166,7 +176,7 @@ export async function POST(request: NextRequest) {
       
     } else if (trimmed === 'pwd') {
       // Print working directory
-      result = { output: projectDir, error: '' };
+      result = { output: safeWorkingDir, error: '' };
       
     } else if (trimmed.startsWith('cat ') || trimmed.startsWith('type ')) {
       // Show file content
@@ -260,7 +270,7 @@ Real terminal with server-side execution.`;
       
     } else {
       // Try to execute as shell command
-      result = await executeShellCommand(trimmed, projectDir);
+      result = await executeShellCommand(trimmed, safeWorkingDir);
     }
     
     return NextResponse.json({
