@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Plus, Trash2, X } from "lucide-react";
 import RealTerminal from "./RealTerminal";
 import { useTerminal } from "./useTerminal";
 
@@ -8,12 +9,25 @@ interface TerminalPanelProps {
   theme?: "dark" | "light";
   projectId?: string;
   workingDirectory?: string;
+  localMode?: boolean;
 }
 
-export default function TerminalPanel({ theme = "dark", projectId = "default", workingDirectory }: TerminalPanelProps) {
+export default function TerminalPanel({
+  theme = "dark",
+  projectId = "default",
+  workingDirectory = ".",
+  localMode = false,
+}: TerminalPanelProps) {
   const isDark = theme === "dark";
-  const { sessions, activeSessionId, activeSession, setActiveSessionId, newSession, closeSession } =
-    useTerminal();
+  const {
+    sessions,
+    activeSessionId,
+    activeSession,
+    setActiveSessionId,
+    newSession,
+    closeSession,
+    updateSessionCwd,
+  } = useTerminal(workingDirectory);
   const [clearVersion, setClearVersion] = useState(0);
 
   return (
@@ -43,20 +57,19 @@ export default function TerminalPanel({ theme = "dark", projectId = "default", w
                 aria-pressed={isActive}
               >
                 <span className="whitespace-nowrap">{session.title || `Terminal ${index + 1}`}</span>
-                <span
+                <button
                   onClick={(event) => {
                     event.stopPropagation();
                     closeSession(session.id);
                   }}
-                  className={`rounded px-1 text-[10px] leading-none opacity-70 hover:opacity-100 ${
+                  className={`rounded p-0.5 opacity-70 hover:opacity-100 ${
                     isDark ? "hover:bg-[#3c3c3c]" : "hover:bg-zinc-300"
                   }`}
-                  role="button"
                   aria-label={`Close ${session.title}`}
                   title="Close terminal"
                 >
-                  ×
-                </span>
+                  <X className="h-3 w-3" />
+                </button>
               </button>
             );
           })}
@@ -71,7 +84,7 @@ export default function TerminalPanel({ theme = "dark", projectId = "default", w
             aria-label="New terminal"
             title="New terminal"
           >
-            +
+            <Plus className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={() => setClearVersion((value) => value + 1)}
@@ -82,7 +95,7 @@ export default function TerminalPanel({ theme = "dark", projectId = "default", w
             title="Clear active terminal"
             disabled={!activeSession}
           >
-            🗑
+            <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
@@ -90,12 +103,15 @@ export default function TerminalPanel({ theme = "dark", projectId = "default", w
       <div className="flex-1 overflow-hidden">
         {activeSession ? (
           <RealTerminal
-            key={`${activeSession.id}-${clearVersion}-${workingDirectory ?? ""}`}
+            key={`${activeSession.id}-${clearVersion}`}
             theme={theme}
             projectId={projectId}
             session={activeSession}
             onClose={closeSession}
-            workingDirectory={workingDirectory}
+            clearSignal={clearVersion}
+            initialDirectory={activeSession.currentDirectory}
+            localMode={localMode}
+            onCwdChange={updateSessionCwd}
           />
         ) : null}
       </div>

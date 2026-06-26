@@ -1,6 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  FilePlus,
+  FolderPlus,
+  Pencil,
+  Trash2,
+} from "lucide-react";
+import { getFileIcon, getFolderIcon } from "@/lib/fileIcons";
 import type { FileNode } from "../types";
 
 interface FileTreeNodeProps {
@@ -32,13 +41,13 @@ export default function FileTreeNode({
 
   const isDir = node.type === "directory";
   const isActive = node.id === activeFileId;
+  const FileIcon = isDir ? getFolderIcon(expanded) : getFileIcon(node.name);
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isDir) {
-      setExpanded((e) => !e);
+      setExpanded((prev) => !prev);
     } else {
-      console.log("File clicked:", node.id, node.name);
       onFileClick(node);
     }
   };
@@ -57,26 +66,42 @@ export default function FileTreeNode({
     <div>
       <div
         style={{ paddingLeft: indent + 8 }}
-        className={`flex items-center gap-1 py-0.5 pr-2 cursor-pointer text-sm select-none group relative ${
+        className={`group relative flex cursor-pointer select-none items-center gap-1 py-0.5 pr-2 text-sm ${
           isActive
             ? isDark
               ? "bg-[#094771] text-white"
               : "bg-blue-100 text-blue-900"
             : isDark
-              ? "hover:bg-[#2a2d2e] text-zinc-300"
-              : "hover:bg-zinc-100 text-zinc-700"
+              ? "text-zinc-300 hover:bg-[#2a2d2e]"
+              : "text-zinc-700 hover:bg-zinc-100"
         }`}
         onClick={handleClick}
         role={isDir ? "treeitem" : "option"}
         aria-expanded={isDir ? expanded : undefined}
         aria-selected={isActive}
       >
-        {/* Icon */}
-        <span className="shrink-0 text-xs w-4 text-center">
-          {isDir ? (expanded ? "▾" : "▸") : "·"}
+        <span className="flex w-3 shrink-0 items-center justify-center">
+          {isDir ? (
+            expanded ? (
+              <ChevronDown className="h-3 w-3 opacity-60" />
+            ) : (
+              <ChevronRight className="h-3 w-3 opacity-60" />
+            )
+          ) : null}
         </span>
 
-        {/* Name / rename input */}
+        <FileIcon
+          className={`h-4 w-4 shrink-0 ${
+            isDir
+              ? isDark
+                ? "text-blue-400"
+                : "text-blue-600"
+              : isDark
+                ? "text-zinc-400"
+                : "text-zinc-500"
+          }`}
+        />
+
         {renaming ? (
           <input
             autoFocus
@@ -87,16 +112,15 @@ export default function FileTreeNode({
               if (e.key === "Enter") handleRenameSubmit();
               if (e.key === "Escape") setRenaming(false);
             }}
-            className="flex-1 bg-transparent border border-blue-400 outline-none text-xs px-1"
+            className="flex-1 border border-blue-400 bg-transparent px-1 text-xs outline-none"
             onClick={(e) => e.stopPropagation()}
           />
         ) : (
           <span className="flex-1 truncate text-xs">{node.name}</span>
         )}
 
-        {/* Context actions (shown on hover) */}
         {!renaming && (
-          <div className="hidden group-hover:flex gap-1 ml-auto">
+          <div className="ml-auto hidden gap-0.5 group-hover:flex">
             {isDir && (
               <>
                 <button
@@ -105,10 +129,10 @@ export default function FileTreeNode({
                     e.stopPropagation();
                     onCreateFile(node.path);
                   }}
-                  className="opacity-60 hover:opacity-100 text-xs px-0.5"
+                  className="rounded p-0.5 opacity-60 hover:bg-white/10 hover:opacity-100"
                   aria-label="New file"
                 >
-                  +f
+                  <FilePlus className="h-3.5 w-3.5" />
                 </button>
                 <button
                   title="New folder"
@@ -116,10 +140,10 @@ export default function FileTreeNode({
                     e.stopPropagation();
                     onCreateFolder(node.path);
                   }}
-                  className="opacity-60 hover:opacity-100 text-xs px-0.5"
+                  className="rounded p-0.5 opacity-60 hover:bg-white/10 hover:opacity-100"
                   aria-label="New folder"
                 >
-                  +d
+                  <FolderPlus className="h-3.5 w-3.5" />
                 </button>
               </>
             )}
@@ -130,10 +154,10 @@ export default function FileTreeNode({
                 setRenameValue(node.name);
                 setRenaming(true);
               }}
-              className="opacity-60 hover:opacity-100 text-xs px-0.5"
+              className="rounded p-0.5 opacity-60 hover:bg-white/10 hover:opacity-100"
               aria-label="Rename"
             >
-              ✎
+              <Pencil className="h-3.5 w-3.5" />
             </button>
             <button
               title="Delete"
@@ -141,16 +165,15 @@ export default function FileTreeNode({
                 e.stopPropagation();
                 onDelete(node);
               }}
-              className="opacity-60 hover:opacity-100 text-xs px-0.5 text-red-400"
+              className="rounded p-0.5 text-red-400 opacity-60 hover:bg-red-400/10 hover:opacity-100"
               aria-label="Delete"
             >
-              ✕
+              <Trash2 className="h-3.5 w-3.5" />
             </button>
           </div>
         )}
       </div>
 
-      {/* Children */}
       {isDir && expanded && node.children && (
         <div role="group">
           {node.children.map((child) => (

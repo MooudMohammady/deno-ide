@@ -2,7 +2,16 @@
 
 import { debounce } from "@/lib/debounce";
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  FolderTree,
+  GitBranch,
+  Puzzle,
+  Settings,
+} from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
+import ResizeHandle from "@/components/ui/ResizeHandle";
 import ProblemsPanel from "./analysis/ProblemsPanel";
 import { useLinting } from "./analysis/useLinting";
 import DebugPanel from "./debugger/DebugPanel";
@@ -92,6 +101,54 @@ async function buildLocalWorkspace(
 
   await walk(handle, root, handle.name);
   return { root, fileMap, handleMap, dirHandleMap };
+}
+
+async function importWorkspaceToServer(
+  files: Array<{ path: string; content: string }>,
+  projectId = "default",
+  rootDirectory?: string
+) {
+  if (rootDirectory) {
+    await fetch("/api/files", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "createDirectory", projectId, path: rootDirectory }),
+    });
+  }
+
+  if (files.length === 0) return;
+
+  const response = await fetch("/api/files", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "importFiles", projectId, files }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to sync opened folder to server");
+  }
+}
+
+async function syncLocalWorkspaceToServer(workspace: LocalWorkspace, projectId = "default") {
+  const files: Array<{ path: string; content: string }> = [];
+
+  for (const [fileId, node] of Object.entries(workspace.fileMap)) {
+    if (node.type !== "file") continue;
+    const handle = workspace.handleMap[fileId];
+    if (!handle) continue;
+    const file = await handle.getFile();
+    const content = await file.text();
+    files.push({ path: node.path, content });
+  }
+
+  await importWorkspaceToServer(files, projectId, workspace.root.path);
+}
+
+function normalizeTerminalDirectory(rootPath?: string | null) {
+  if (!rootPath || rootPath === "/" || rootPath === "") {
+    return ".";
+  }
+  return rootPath.replace(/\\/g, "/").replace(/^\//, "");
 }
 
 function normalizeProjectPath(parentPath: string, name: string) {
@@ -207,6 +264,16 @@ export default function IDELayout({}: IDELayoutProps) {
   const toggleTerminal = () => updateLayout({ showTerminal: !layout.showTerminal });
   const toggleDebugPanel = () => updateLayout({ showDebugPanel: !layout.showDebugPanel });
 
+  const handleSidebarResize = useCallback(
+    (width: number) => updateLayout({ sidebarWidth: width }),
+    [updateLayout]
+  );
+
+  const handleTerminalResize = useCallback(
+    (height: number) => updateLayout({ terminalHeight: height }),
+    [updateLayout]
+  );
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -228,7 +295,7 @@ export default function IDELayout({}: IDELayoutProps) {
   const activeFile = editorState.activeFileId ? displayFileMap[editorState.activeFileId] : null;
   const activeContent = editorState.activeFileId ? fileContents[editorState.activeFileId] || '' : '';
   const activeLanguage = activeFile ? detectLanguage(activeFile.name) : "plaintext";
-  const terminalWorkingDirectory = displayRoot?.path || root?.path || "/";
+  const terminalWorkingDirectory = normalizeTerminalDirectory(displayRoot?.path ?? root?.path);
 
   const handleOpenFile = () => fileInputRef.current?.click();
   const handleOpenFolder = async () => {
@@ -238,6 +305,11 @@ export default function IDELayout({}: IDELayoutProps) {
       setLocalWorkspace(workspace);
       setFileContents({});
       setDirtyFiles({});
+      try {
+        await syncLocalWorkspaceToServer(workspace);
+      } catch (error) {
+        console.error("Failed to sync folder for terminal:", error);
+      }
       return;
     }
     folderInputRef.current?.click();
@@ -394,6 +466,7 @@ export default function IDELayout({}: IDELayoutProps) {
       children: [],
     };
     const fileMapOverride: Record<string, FileNode> = { [treeRoot.id]: treeRoot };
+    const importFiles: Array<{ path: string; content: string }> = [];
     for (const file of files) {
       const relativePath = file.webkitRelativePath || file.name;
       const parts = relativePath.split("/").filter(Boolean);
@@ -427,10 +500,16 @@ export default function IDELayout({}: IDELayoutProps) {
       current.children.push(fileNode);
       fileMapOverride[fileNode.id] = fileNode;
       const content = await readFileAsText(file);
+      importFiles.push({ path: relativePath, content });
       setFileContents((prev) => ({ ...prev, [fileNode.id]: content }));
     }
 
     setLocalWorkspace({ root: treeRoot, fileMap: fileMapOverride, handleMap: {}, dirHandleMap: {} });
+    try {
+      await importWorkspaceToServer(importFiles, "default", folderName);
+    } catch (error) {
+      console.error("Failed to sync folder for terminal:", error);
+    }
   };
 
   return (
@@ -483,38 +562,41 @@ export default function IDELayout({}: IDELayoutProps) {
 
       <div className="flex flex-1 overflow-hidden">
         {layout.showSidebar && (
-          <aside style={{ width: layout.sidebarWidth }} className={`shrink-0 flex flex-col overflow-hidden ${isDark ? "bg-[#252526] border-r border-[#3c3c3c]" : "bg-zinc-50 border-r border-zinc-200"}`}>
-            {/* Sidebar view tabs */}
-            <div className={`flex shrink-0 text-xs ${isDark ? "border-b border-[#3c3c3c]" : "border-b border-zinc-200"}`}>
-              <button
-                onClick={() => setSidebarView("explorer")}
-                className={`px-3 py-1.5 ${sidebarView === "explorer" ? (isDark ? "border-b-2 border-blue-400 text-zinc-100" : "border-b-2 border-blue-500 text-zinc-900") : "opacity-50 hover:opacity-80"}`}
-                aria-label="Explorer"
-              >
-                📁
-              </button>
-              <button
-                onClick={() => setSidebarView("extensions")}
-                className={`px-3 py-1.5 ${sidebarView === "extensions" ? (isDark ? "border-b-2 border-blue-400 text-zinc-100" : "border-b-2 border-blue-500 text-zinc-900") : "opacity-50 hover:opacity-80"}`}
-                aria-label="Extensions"
-              >
-                🧩
-              </button>
-              <button
-                onClick={() => setSidebarView("settings")}
-                className={`px-3 py-1.5 ${sidebarView === "settings" ? (isDark ? "border-b-2 border-blue-400 text-zinc-100" : "border-b-2 border-blue-500 text-zinc-900") : "opacity-50 hover:opacity-80"}`}
-                aria-label="Settings"
-              >
-                ⚙
-              </button>
-              <button
-                onClick={() => setSidebarView("git")}
-                className={`px-3 py-1.5 ${sidebarView === "git" ? (isDark ? "border-b-2 border-blue-400 text-zinc-100" : "border-b-2 border-blue-500 text-zinc-900") : "opacity-50 hover:opacity-80"}`}
-                aria-label="Git"
-              >
-                ⎇
-              </button>
-            </div>
+          <>
+            <aside
+              style={{ width: layout.sidebarWidth }}
+              className={`flex shrink-0 flex-col overflow-hidden ${isDark ? "bg-[#252526] border-r border-[#3c3c3c]" : "bg-zinc-50 border-r border-zinc-200"}`}
+            >
+              <div className={`flex shrink-0 text-xs ${isDark ? "border-b border-[#3c3c3c]" : "border-b border-zinc-200"}`}>
+                <button
+                  onClick={() => setSidebarView("explorer")}
+                  className={`px-3 py-1.5 ${sidebarView === "explorer" ? (isDark ? "border-b-2 border-blue-400 text-zinc-100" : "border-b-2 border-blue-500 text-zinc-900") : "opacity-50 hover:opacity-80"}`}
+                  aria-label="Explorer"
+                >
+                  <FolderTree className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => setSidebarView("extensions")}
+                  className={`px-3 py-1.5 ${sidebarView === "extensions" ? (isDark ? "border-b-2 border-blue-400 text-zinc-100" : "border-b-2 border-blue-500 text-zinc-900") : "opacity-50 hover:opacity-80"}`}
+                  aria-label="Extensions"
+                >
+                  <Puzzle className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => setSidebarView("settings")}
+                  className={`px-3 py-1.5 ${sidebarView === "settings" ? (isDark ? "border-b-2 border-blue-400 text-zinc-100" : "border-b-2 border-blue-500 text-zinc-900") : "opacity-50 hover:opacity-80"}`}
+                  aria-label="Settings"
+                >
+                  <Settings className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => setSidebarView("git")}
+                  className={`px-3 py-1.5 ${sidebarView === "git" ? (isDark ? "border-b-2 border-blue-400 text-zinc-100" : "border-b-2 border-blue-500 text-zinc-900") : "opacity-50 hover:opacity-80"}`}
+                  aria-label="Git"
+                >
+                  <GitBranch className="h-4 w-4" />
+                </button>
+              </div>
             {sidebarView === "explorer" ? (
               <FileExplorer
                 root={displayRoot}
@@ -567,7 +649,16 @@ export default function IDELayout({}: IDELayoutProps) {
                 onReset={resetSettings}
               />
             )}
-          </aside>
+            </aside>
+            <ResizeHandle
+              direction="horizontal"
+              value={layout.sidebarWidth}
+              onChange={handleSidebarResize}
+              min={160}
+              max={480}
+              className={isDark ? "bg-[#3c3c3c]" : "bg-zinc-200"}
+            />
+          </>
         )}
 
         <div className="flex flex-col flex-1 overflow-hidden">
@@ -601,7 +692,21 @@ export default function IDELayout({}: IDELayoutProps) {
           </main>
 
           {layout.showTerminal && (
-            <div style={{ height: layout.terminalHeight }} className={`shrink-0 overflow-hidden flex flex-col ${isDark ? "bg-[#1e1e1e] border-t border-[#3c3c3c]" : "bg-zinc-50 border-t border-zinc-200"}`} aria-label="Terminal">
+            <>
+              <ResizeHandle
+                direction="vertical"
+                value={layout.terminalHeight}
+                onChange={handleTerminalResize}
+                min={120}
+                max={560}
+                invert
+                className={isDark ? "bg-[#3c3c3c]" : "bg-zinc-200"}
+              />
+              <div
+                style={{ height: layout.terminalHeight }}
+                className={`flex shrink-0 flex-col overflow-hidden ${isDark ? "bg-[#1e1e1e] border-t border-[#3c3c3c]" : "bg-zinc-50 border-t border-zinc-200"}`}
+                aria-label="Terminal"
+              >
               {/* Bottom panel tabs */}
               <div className={`flex shrink-0 text-xs ${isDark ? "border-b border-[#3c3c3c] bg-[#252526]" : "border-b border-zinc-200 bg-zinc-100"}`}>
                 <button
@@ -631,6 +736,7 @@ export default function IDELayout({}: IDELayoutProps) {
                 )}
               </div>
             </div>
+            </>
           )}
         </div>
 
@@ -677,9 +783,19 @@ export default function IDELayout({}: IDELayoutProps) {
           <span className="ml-auto capitalize text-yellow-200">Debug: {debugSession.status}</span>
         )}
         {(totalErrors > 0 || totalWarnings > 0) && (
-          <span className={`${debugSession.status !== "inactive" ? "" : "ml-auto"} flex gap-2`}>
-            {totalErrors > 0 && <span className="text-red-300">✕ {totalErrors}</span>}
-            {totalWarnings > 0 && <span className="text-yellow-300">⚠ {totalWarnings}</span>}
+          <span className={`${debugSession.status !== "inactive" ? "" : "ml-auto"} flex items-center gap-2`}>
+            {totalErrors > 0 && (
+              <span className="flex items-center gap-1 text-red-300">
+                <AlertCircle className="h-3 w-3" />
+                {totalErrors}
+              </span>
+            )}
+            {totalWarnings > 0 && (
+              <span className="flex items-center gap-1 text-yellow-300">
+                <AlertTriangle className="h-3 w-3" />
+                {totalWarnings}
+              </span>
+            )}
           </span>
         )}
       </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { TerminalSession } from "../types";
 
 interface TerminalResponse {
@@ -13,20 +13,77 @@ interface TerminalResponse {
 type UseRealTerminalOptions = {
   session: TerminalSession;
   projectId?: string;
-  workingDirectory?: string;
+  initialDirectory?: string;
+  localMode?: boolean;
+  onCwdChange?: (sessionId: string, cwd: string) => void;
 };
 
-export function useRealTerminal({ session, projectId = "default", workingDirectory }: UseRealTerminalOptions) {
-  const [output, setOutput] = useState<string[]>([
+function formatPromptPath(cwd: string) {
+  return cwd === "." ? "~" : cwd;
+}
+
+export function useRealTerminal({
+  session,
+  projectId = "default",
+  initialDirectory,
+  localMode = false,
+  onCwdChange,
+}: UseRealTerminalOptions) {
+  const startingDirectory = initialDirectory || session.currentDirectory || ".";
+  const [currentDirectory, setCurrentDirectory] = useState(startingDirectory);
+  const [executionDirectory, setExecutionDirectory] = useState(localMode ? "." : startingDirectory);
+  const executionDirectoryRef = useRef(localMode ? "." : startingDirectory);
+  const displayDirectoryRef = useRef(startingDirectory);
+  const previousInitialDirectory = useRef(startingDirectory);
+
+  useEffect(() => {
+    displayDirectoryRef.current = currentDirectory;
+  }, [currentDirectory]);
+
+  useEffect(() => {
+    executionDirectoryRef.current = executionDirectory;
+  }, [executionDirectory]);
+
+  const [output, setOutput] = useState<string[]>(() => [
     `${session.title} ready`,
-    `Current directory: ${session.currentDirectory || "/"}`,
+    `Current directory: ${formatPromptPath(startingDirectory)}`,
     "",
   ]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [currentDirectory, setCurrentDirectory] = useState(session.currentDirectory || "/");
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
+
+  useEffect(() => {
+    if (!initialDirectory || previousInitialDirectory.current === initialDirectory) return;
+
+    previousInitialDirectory.current = initialDirectory;
+    setCurrentDirectory(initialDirectory);
+    if (!localMode) {
+      setExecutionDirectory(initialDirectory);
+      executionDirectoryRef.current = initialDirectory;
+    }
+    onCwdChange?.(session.id, initialDirectory);
+    setOutput((prev) => [
+      ...prev,
+      `Working directory set to: ${formatPromptPath(initialDirectory)}`,
+      "",
+    ]);
+  }, [initialDirectory, localMode, onCwdChange, session.id]);
+
+  const updateCwd = useCallback(
+    (cwd: string) => {
+      setExecutionDirectory(cwd);
+      executionDirectoryRef.current = cwd;
+
+      if (!localMode) {
+        setCurrentDirectory(cwd);
+        displayDirectoryRef.current = cwd;
+        onCwdChange?.(session.id, cwd);
+      }
+    },
+    [localMode, onCwdChange, session.id]
+  );
 
   const clearOutput = useCallback(() => {
     setOutput([]);
@@ -52,58 +109,65 @@ export function useRealTerminal({ session, projectId = "default", workingDirecto
     });
   }, [commandHistory]);
 
-  const historyEntry = historyIndex >= 0 && historyIndex < commandHistory.length ? commandHistory[historyIndex] ?? "" : "";
+  const historyEntry =
+    historyIndex >= 0 && historyIndex < commandHistory.length ? commandHistory[historyIndex] ?? "" : "";
 
-  const executeCommand = useCallback(async (command: string) => {
-    const trimmed = command.trim();
-    if (!trimmed) {
-      return { success: true, output: "", error: undefined };
-    }
-
-    pushCommandHistory(trimmed);
-    setLoading(true);
-    setError(null);
-    setOutput((prev) => [...prev, `$ ${trimmed}`]);
-
-    try {
-      const response = await fetch("/api/terminal/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          command: trimmed,
-          projectId,
-          cwd: workingDirectory,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to execute command");
+  const executeCommand = useCallback(
+    async (command: string) => {
+      const trimmed = command.trim();
+      if (!trimmed) {
+        return { success: true, output: "", error: undefined };
       }
 
-      const data: TerminalResponse = await response.json();
+      pushCommandHistory(trimmed);
+      setLoading(true);
+      setError(null);
+      setOutput((prev) => [
+        ...prev,
+        `$ ${formatPromptPath(displayDirectoryRef.current)} > ${trimmed}`,
+      ]);
 
-      if (data.output) {
-        setOutput((prev) => [...prev, data.output, ""]);
+      try {
+        const response = await fetch("/api/terminal/execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            command: trimmed,
+            projectId,
+            cwd: executionDirectoryRef.current,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to execute command");
+        }
+
+        const data: TerminalResponse = await response.json();
+
+        if (data.output) {
+          setOutput((prev) => [...prev, data.output, ""]);
+        }
+
+        if (data.error) {
+          setOutput((prev) => [...prev, `Error: ${data.error}`, ""]);
+        }
+
+        if (data.cwd) {
+          updateCwd(data.cwd);
+        }
+
+        return data;
+      } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : "Unknown terminal error";
+        setError(errorMessage);
+        setOutput((prev) => [...prev, `Error: ${errorMessage}`, ""]);
+        return { success: false, output: "", error: errorMessage };
+      } finally {
+        setLoading(false);
       }
-
-      if (data.error) {
-        setOutput((prev) => [...prev, `Error: ${data.error}`, ""]);
-      }
-
-      if (data.cwd) {
-        setCurrentDirectory(data.cwd);
-      }
-
-      return data;
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : "Unknown terminal error";
-      setError(errorMessage);
-      setOutput((prev) => [...prev, `Error: ${errorMessage}`, ""]);
-      return { success: false, output: "", error: errorMessage };
-    } finally {
-      setLoading(false);
-    }
-  }, [projectId, pushCommandHistory, workingDirectory]);
+    },
+    [projectId, pushCommandHistory, updateCwd]
+  );
 
   return {
     output,

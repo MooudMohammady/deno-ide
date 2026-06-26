@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { FilePlus, FolderPlus } from "lucide-react";
 import type { FileNode } from "../types";
 import FileTreeNode from "./FileTreeNode";
 
@@ -67,19 +68,19 @@ export default function FileExplorer({
           <div className="flex gap-1">
             <button
               onClick={() => handleCreateFile(root.path)}
-              className="opacity-60 hover:opacity-100 text-xs"
+              className="rounded p-1 opacity-60 transition hover:bg-white/10 hover:opacity-100"
               aria-label="New file"
               title="New file"
             >
-              +f
+              <FilePlus className="h-3.5 w-3.5" />
             </button>
             <button
               onClick={() => handleCreateFolder(root.path)}
-              className="opacity-60 hover:opacity-100 text-xs"
+              className="rounded p-1 opacity-60 transition hover:bg-white/10 hover:opacity-100"
               aria-label="New folder"
               title="New folder"
             >
-              +d
+              <FolderPlus className="h-3.5 w-3.5" />
             </button>
           </div>
         )}

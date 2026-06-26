@@ -1,6 +1,7 @@
 "use client";
 
 import { KeyboardEvent, useEffect, useRef, useState } from "react";
+import { AlertTriangle, Circle, Folder, Loader2 } from "lucide-react";
 import type { TerminalSession } from "../types";
 import { useRealTerminal } from "./useRealTerminal";
 
@@ -10,7 +11,13 @@ interface RealTerminalProps {
   session: TerminalSession;
   onClose?: (sessionId: string) => void;
   clearSignal?: number;
-  workingDirectory?: string;
+  initialDirectory?: string;
+  localMode?: boolean;
+  onCwdChange?: (sessionId: string, cwd: string) => void;
+}
+
+function formatPromptPath(cwd: string) {
+  return cwd === "." ? "~" : cwd;
 }
 
 export default function RealTerminal({
@@ -19,7 +26,9 @@ export default function RealTerminal({
   session,
   onClose,
   clearSignal,
-  workingDirectory,
+  initialDirectory,
+  localMode = false,
+  onCwdChange,
 }: RealTerminalProps) {
   const isDark = theme === "dark";
   const [input, setInput] = useState("");
@@ -36,7 +45,18 @@ export default function RealTerminal({
     executeCommand,
     clearOutput,
     setHistoryIndex,
-  } = useRealTerminal({ session, projectId, clearSignal, workingDirectory });
+  } = useRealTerminal({
+    session,
+    projectId,
+    initialDirectory: initialDirectory ?? session.currentDirectory,
+    localMode,
+    onCwdChange,
+  });
+
+  useEffect(() => {
+    if (clearSignal === undefined) return;
+    clearOutput();
+  }, [clearSignal, clearOutput]);
 
   useEffect(() => {
     if (outputRef.current) {
@@ -52,7 +72,7 @@ export default function RealTerminal({
     const trimmed = command.trim();
     if (!trimmed) return;
 
-    if (trimmed === "clear") {
+    if (trimmed === "clear" || trimmed === "cls") {
       clearOutput();
       setInput("");
       return;
@@ -91,10 +111,7 @@ export default function RealTerminal({
       if (commandHistory.length === 0) return;
       if (historyCursorRef.current < 0) return;
 
-      historyCursorRef.current = Math.min(
-        commandHistory.length - 1,
-        historyCursorRef.current + 1
-      );
+      historyCursorRef.current = Math.min(commandHistory.length - 1, historyCursorRef.current + 1);
 
       if (historyCursorRef.current >= commandHistory.length - 1) {
         historyCursorRef.current = -1;
@@ -111,7 +128,7 @@ export default function RealTerminal({
     }
   };
 
-  const cwd = workingDirectory || currentDirectory;
+  const promptPath = formatPromptPath(currentDirectory);
 
   return (
     <div className={`flex h-full flex-col ${isDark ? "bg-[#1e1e1e] text-zinc-100" : "bg-white text-zinc-900"}`}>
@@ -121,14 +138,18 @@ export default function RealTerminal({
         }`}
       >
         <div className="flex items-center gap-2">
-          <span className="text-green-400">●</span>
-          <span>Real Terminal</span>
+          <Circle className="h-2.5 w-2.5 fill-green-400 text-green-400" />
+          <span>Terminal</span>
           <span className="opacity-60">({session.title})</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="opacity-60">📁 {cwd}</span>
-          {loading && <span className="animate-pulse">⏳</span>}
-          {error && <span className="text-red-400">⚠</span>}
+          <span className="flex items-center gap-1 opacity-60">
+            <Folder className="h-3.5 w-3.5" />
+            {promptPath}
+          </span>
+          {localMode && <span className="opacity-50">local</span>}
+          {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {error && <AlertTriangle className="h-3.5 w-3.5 text-red-400" />}
         </div>
       </div>
 
@@ -144,7 +165,7 @@ export default function RealTerminal({
         ))}
         {loading && (
           <div className="flex items-center gap-2 text-blue-400">
-            <span className="animate-spin">⏳</span>
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
             <span>Executing command...</span>
           </div>
         )}
@@ -153,7 +174,7 @@ export default function RealTerminal({
 
       <div className={`flex items-center p-3 border-t ${isDark ? "border-[#3c3c3c]" : "border-zinc-300"}`}>
         <span className="mr-2 text-green-400">$</span>
-        <span className="mr-2 text-blue-400 opacity-80">{cwd}</span>
+        <span className="mr-2 text-blue-400 opacity-80">{promptPath}</span>
         <span className="mr-2 text-green-400">&gt;</span>
         <input
           ref={inputRef}
@@ -175,7 +196,7 @@ export default function RealTerminal({
           autoCorrect="off"
           disabled={loading}
         />
-        {loading && <span className="ml-2 animate-spin text-blue-400">⏳</span>}
+        {loading && <Loader2 className="ml-2 h-3.5 w-3.5 animate-spin text-blue-400" />}
       </div>
 
       <div
@@ -184,7 +205,11 @@ export default function RealTerminal({
         }`}
       >
         <div className="flex justify-between gap-3">
-          <span>Real terminal connected to server. Commands execute on the server.</span>
+          <span>
+            {localMode
+              ? "Local folder open — commands execute on the server project."
+              : "Commands run in the current working directory."}
+          </span>
           <span className="flex gap-2">
             <button onClick={() => handleExecute("help")} className="opacity-60 hover:opacity-100">
               help

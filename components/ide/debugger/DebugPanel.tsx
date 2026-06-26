@@ -1,5 +1,14 @@
 "use client";
 
+import {
+  ArrowDown,
+  ArrowUp,
+  Circle,
+  Play,
+  RotateCcw,
+  SkipForward,
+  Square,
+} from "lucide-react";
 import type { Breakpoint, DebugSession, Variable } from "../types";
 
 interface DebugPanelProps {
@@ -44,57 +53,57 @@ export default function DebugPanel({
         {!isRunning ? (
           <button
             onClick={onStart}
-            className="px-2 py-0.5 rounded text-green-400 hover:bg-green-400/10 transition-colors"
+            className="rounded px-2 py-0.5 text-green-400 transition-colors hover:bg-green-400/10"
             aria-label="Start debugging"
             title="Start"
           >
-            ▶
+            <Play className="h-3.5 w-3.5 fill-current" />
           </button>
         ) : (
           <>
             <button
               onClick={onContinue}
               disabled={session.status !== "paused"}
-              className="px-2 py-0.5 rounded text-blue-400 hover:bg-blue-400/10 disabled:opacity-30 transition-colors"
+              className="rounded px-2 py-0.5 text-blue-400 transition-colors hover:bg-blue-400/10 disabled:opacity-30"
               aria-label="Continue"
               title="Continue"
             >
-              ▶▶
+              <SkipForward className="h-3.5 w-3.5 fill-current" />
             </button>
             <button
               onClick={onStepOver}
               disabled={session.status !== "paused"}
-              className="px-2 py-0.5 rounded opacity-70 hover:opacity-100 disabled:opacity-30 transition-opacity"
+              className="rounded px-2 py-0.5 opacity-70 transition-opacity hover:opacity-100 disabled:opacity-30"
               aria-label="Step over"
               title="Step Over"
             >
-              ↷
+              <RotateCcw className="h-3.5 w-3.5" />
             </button>
             <button
               onClick={onStepInto}
               disabled={session.status !== "paused"}
-              className="px-2 py-0.5 rounded opacity-70 hover:opacity-100 disabled:opacity-30 transition-opacity"
+              className="rounded px-2 py-0.5 opacity-70 transition-opacity hover:opacity-100 disabled:opacity-30"
               aria-label="Step into"
               title="Step Into"
             >
-              ↓
+              <ArrowDown className="h-3.5 w-3.5" />
             </button>
             <button
               onClick={onStepOut}
               disabled={session.status !== "paused"}
-              className="px-2 py-0.5 rounded opacity-70 hover:opacity-100 disabled:opacity-30 transition-opacity"
+              className="rounded px-2 py-0.5 opacity-70 transition-opacity hover:opacity-100 disabled:opacity-30"
               aria-label="Step out"
               title="Step Out"
             >
-              ↑
+              <ArrowUp className="h-3.5 w-3.5" />
             </button>
             <button
               onClick={onStop}
-              className="px-2 py-0.5 rounded text-red-400 hover:bg-red-400/10 transition-colors"
+              className="rounded px-2 py-0.5 text-red-400 transition-colors hover:bg-red-400/10"
               aria-label="Stop debugging"
               title="Stop"
             >
-              ■
+              <Square className="h-3.5 w-3.5 fill-current" />
             </button>
           </>
         )}
@@ -138,7 +147,9 @@ export default function DebugPanel({
               className={`${rowClass} flex items-center gap-2 cursor-pointer hover:opacity-80`}
               onClick={() => onToggleBreakpoint(bp)}
             >
-              <span className={bp.enabled ? "text-red-400" : "opacity-30"}>●</span>
+              <Circle
+                className={`h-2.5 w-2.5 ${bp.enabled ? "fill-red-400 text-red-400" : "opacity-30"}`}
+              />
               <span>Line {bp.line}</span>
             </div>
           ))

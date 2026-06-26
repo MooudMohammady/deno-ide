@@ -1,5 +1,6 @@
 "use client";
 
+import { Circle, X } from "lucide-react";
 import type { FileNode } from "../types";
 
 interface EditorTabsProps {
@@ -49,16 +50,16 @@ export default function EditorTabs({
             }`}
           >
             <span>{file?.name ?? fileId}</span>
-            {dirty && <span className="text-yellow-400">●</span>}
+            {dirty && <Circle className="h-2 w-2 fill-yellow-400 text-yellow-400" />}
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 onClose(fileId);
               }}
-              className="ml-1 opacity-50 hover:opacity-100 transition-opacity"
+              className="ml-1 opacity-50 transition-opacity hover:opacity-100"
               aria-label={`Close ${file?.name ?? fileId}`}
             >
-              ×
+              <X className="h-3 w-3" />
             </button>
           </div>
         );

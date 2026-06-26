@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Bug, Menu, TerminalSquare } from "lucide-react";
 
 interface MenuBarProps {
   theme?: "dark" | "light";
@@ -210,9 +211,15 @@ export default function MenuBar({
         <div className="h-4 w-px bg-gray-500 opacity-30"></div>
         
         <div className="flex gap-3">
-          <button onClick={onToggleSidebar} className="opacity-70 hover:opacity-100 transition-opacity" aria-label="Toggle sidebar" title="Toggle Sidebar (Ctrl+B)">☰</button>
-          <button onClick={onToggleTerminal} className="opacity-70 hover:opacity-100 transition-opacity" aria-label="Toggle terminal" title="Toggle Terminal (Ctrl+`)">⌨</button>
-          <button onClick={onToggleDebugPanel} className="opacity-70 hover:opacity-100 transition-opacity" aria-label="Toggle debug panel" title="Toggle Debug Panel">🐛</button>
+          <button onClick={onToggleSidebar} className="opacity-70 hover:opacity-100 transition-opacity" aria-label="Toggle sidebar" title="Toggle Sidebar (Ctrl+B)">
+            <Menu className="h-4 w-4" />
+          </button>
+          <button onClick={onToggleTerminal} className="opacity-70 hover:opacity-100 transition-opacity" aria-label="Toggle terminal" title="Toggle Terminal (Ctrl+`)">
+            <TerminalSquare className="h-4 w-4" />
+          </button>
+          <button onClick={onToggleDebugPanel} className="opacity-70 hover:opacity-100 transition-opacity" aria-label="Toggle debug panel" title="Toggle Debug Panel">
+            <Bug className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </div>

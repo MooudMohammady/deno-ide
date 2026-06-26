@@ -3,23 +3,35 @@ import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
 import { promisify } from 'util';
+import {
+  resolveCdTarget,
+  resolveProjectFilePath,
+  resolveSafeWorkingDir,
+  toClientCwd,
+} from '@/lib/terminalPaths';
 
 const writeFile = promisify(fs.writeFile);
 const unlink = promisify(fs.unlink);
 const exists = promisify(fs.exists);
 const mkdir = promisify(fs.mkdir);
 
-// Helper function to execute Python code
 async function executePythonCode(code: string, workingDir: string): Promise<{ output: string; error: string }> {
   return new Promise((resolve) => {
-    // Create a temporary Python file
+    if (!fs.existsSync(workingDir) || !fs.statSync(workingDir).isDirectory()) {
+      resolve({
+        output: `Working directory not found: ${workingDir}`,
+        error: 'Working directory not found',
+      });
+      return;
+    }
+
     const tempFile = path.join(workingDir, `temp_${Date.now()}.py`);
-    
+
     writeFile(tempFile, code, 'utf-8')
       .then(() => {
         const pythonProcess = spawn('python', [tempFile], {
           cwd: workingDir,
-          stdio: ['pipe', 'pipe', 'pipe']
+          stdio: ['pipe', 'pipe', 'pipe'],
         });
 
         let output = '';
@@ -34,9 +46,8 @@ async function executePythonCode(code: string, workingDir: string): Promise<{ ou
         });
 
         pythonProcess.on('close', (code) => {
-          // Clean up temp file
           unlink(tempFile).catch(() => {});
-          
+
           if (code === 0) {
             resolve({ output, error });
           } else {
@@ -45,26 +56,39 @@ async function executePythonCode(code: string, workingDir: string): Promise<{ ou
         });
 
         pythonProcess.on('error', (err) => {
-          // Clean up temp file
           unlink(tempFile).catch(() => {});
           resolve({ output: `Error: ${err.message}`, error: err.message });
         });
       })
-      .catch(err => {
+      .catch((err) => {
         resolve({ output: `Error creating temp file: ${err.message}`, error: err.message });
       });
   });
 }
 
-// Helper function to execute shell command
+function resolveShell(): string {
+  if (process.platform === 'win32') {
+    return process.env.ComSpec || path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
+  }
+  return '/bin/bash';
+}
+
 async function executeShellCommand(command: string, workingDir: string): Promise<{ output: string; error: string }> {
   return new Promise((resolve) => {
-    const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/bash';
+    if (!fs.existsSync(workingDir) || !fs.statSync(workingDir).isDirectory()) {
+      resolve({
+        output: `Working directory not found: ${workingDir}`,
+        error: 'Working directory not found',
+      });
+      return;
+    }
+
+    const shell = resolveShell();
     const args = process.platform === 'win32' ? ['/c', command] : ['-c', command];
-    
+
     const processObj = spawn(shell, args, {
       cwd: workingDir,
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     let output = '';
@@ -96,157 +120,146 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { command, projectId = 'default', cwd } = body;
-    
+
     const BASE_DIR = process.cwd();
     const PROJECTS_DIR = path.join(BASE_DIR, 'projects');
     const projectDir = path.join(PROJECTS_DIR, projectId);
-    const requestedCwd = typeof cwd === 'string' && cwd.trim() ? cwd.trim() : projectDir;
-    const workingDir = path.isAbsolute(requestedCwd)
-      ? requestedCwd
-      : path.join(projectDir, requestedCwd);
-
     const resolvedProjectDir = path.resolve(projectDir);
-    const resolvedWorkingDir = path.resolve(workingDir);
-    const safeWorkingDir = resolvedWorkingDir.startsWith(resolvedProjectDir)
-      ? resolvedWorkingDir
-      : resolvedProjectDir;
-    
-    // Ensure project directory exists
+    const safeWorkingDir = resolveSafeWorkingDir(projectDir, cwd);
+
     if (!(await exists(projectDir))) {
       await mkdir(projectDir, { recursive: true });
     }
-    
+
     if (!command) {
-      return NextResponse.json(
-        { error: 'Command is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Command is required' }, { status: 400 });
     }
-    
+
     const trimmed = command.trim();
     let result: { output: string; error: string };
-    
-    // Handle different types of commands
+    let nextWorkingDir = safeWorkingDir;
+
     if (trimmed.startsWith('python ')) {
       const filename = trimmed.substring(7).trim();
-      const fullPath = path.join(projectDir, filename);
-      
-      if (!(await exists(fullPath))) {
+      const fullPath = resolveProjectFilePath(filename, safeWorkingDir, projectDir);
+
+      if (!fullPath || !(await exists(fullPath))) {
         return NextResponse.json({
           success: false,
           output: `Python file not found: ${filename}`,
-          error: `File not found: ${filename}`
+          error: `File not found: ${filename}`,
+          cwd: toClientCwd(safeWorkingDir, projectDir),
         });
       }
-      
-      // Read Python file content
+
       const pythonCode = fs.readFileSync(fullPath, 'utf-8');
       result = await executePythonCode(pythonCode, path.dirname(fullPath));
-      
     } else if (trimmed.startsWith('node ')) {
       const filename = trimmed.substring(5).trim();
-      const fullPath = path.join(projectDir, filename);
-      
-      if (!(await exists(fullPath))) {
+      const fullPath = resolveProjectFilePath(filename, safeWorkingDir, projectDir);
+
+      if (!fullPath || !(await exists(fullPath))) {
         return NextResponse.json({
           success: false,
           output: `Node.js file not found: ${filename}`,
-          error: `File not found: ${filename}`
+          error: `File not found: ${filename}`,
+          cwd: toClientCwd(safeWorkingDir, projectDir),
         });
       }
-      
-      // Execute Node.js file
+
       result = await executeShellCommand(`node "${fullPath}"`, path.dirname(fullPath));
-      
     } else if (trimmed === 'ls' || trimmed === 'dir') {
-      // List files
       const listCommand = process.platform === 'win32' ? 'dir /B' : 'ls -la';
-      result = await executeShellCommand(listCommand, projectDir);
-      
-    } else if (trimmed.startsWith('cd ')) {
-      // Change directory (simulated)
-      const dir = trimmed.substring(3).trim();
-      const newDir = path.join(projectDir, dir);
-      
-      if (await exists(newDir) && fs.statSync(newDir).isDirectory()) {
-        result = { output: `Changed directory to: ${dir}`, error: '' };
+      result = await executeShellCommand(listCommand, safeWorkingDir);
+    } else if (trimmed === 'cd' || trimmed.startsWith('cd ')) {
+      const target = trimmed === 'cd' ? '' : trimmed.substring(3).trim();
+      const newDir = resolveCdTarget(safeWorkingDir, target, projectDir);
+
+      if (newDir) {
+        nextWorkingDir = newDir;
+        const displayPath = toClientCwd(newDir, projectDir);
+        result = {
+          output: displayPath === '.' ? 'Changed directory to project root' : `Changed directory to ${displayPath}`,
+          error: '',
+        };
       } else {
-        result = { output: `Directory not found: ${dir}`, error: `Directory not found` };
+        result = {
+          output: `Directory not found: ${target || '~'}`,
+          error: 'Directory not found',
+        };
       }
-      
     } else if (trimmed === 'pwd') {
-      // Print working directory
-      result = { output: safeWorkingDir, error: '' };
-      
+      result = { output: toClientCwd(safeWorkingDir, projectDir), error: '' };
     } else if (trimmed.startsWith('cat ') || trimmed.startsWith('type ')) {
-      // Show file content
-      const filename = trimmed.substring(4).trim();
-      const fullPath = path.join(projectDir, filename);
-      
-      if (await exists(fullPath)) {
+      const prefixLength = trimmed.startsWith('type ') ? 5 : 4;
+      const filename = trimmed.substring(prefixLength).trim();
+      const fullPath = resolveProjectFilePath(filename, safeWorkingDir, projectDir);
+
+      if (fullPath && (await exists(fullPath))) {
         const content = fs.readFileSync(fullPath, 'utf-8');
         result = { output: content, error: '' };
       } else {
-        result = { output: `File not found: ${filename}`, error: `File not found` };
+        result = { output: `File not found: ${filename}`, error: 'File not found' };
       }
-      
     } else if (trimmed.startsWith('mkdir ')) {
-      // Create directory
       const dirname = trimmed.substring(6).trim();
-      const fullPath = path.join(projectDir, dirname);
-      
-      try {
-        await mkdir(fullPath, { recursive: true });
-        result = { output: `Directory created: ${dirname}`, error: '' };
-      } catch (err: any) {
-        result = { output: `Error creating directory: ${err.message}`, error: err.message };
+      const fullPath = resolveProjectFilePath(dirname, safeWorkingDir, projectDir);
+
+      if (!fullPath) {
+        result = { output: 'Invalid directory path', error: 'Invalid path' };
+      } else {
+        try {
+          await mkdir(fullPath, { recursive: true });
+          result = { output: `Directory created: ${toClientCwd(fullPath, projectDir)}`, error: '' };
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Unknown mkdir error';
+          result = { output: `Error creating directory: ${message}`, error: message };
+        }
       }
-      
     } else if (trimmed.startsWith('touch ') || trimmed.startsWith('echo > ')) {
-      // Create file
-      const filename = trimmed.startsWith('touch ') 
+      const filename = trimmed.startsWith('touch ')
         ? trimmed.substring(6).trim()
         : trimmed.substring(7).trim();
-      const fullPath = path.join(projectDir, filename);
-      
-      try {
-        await writeFile(fullPath, '', 'utf-8');
-        result = { output: `File created: ${filename}`, error: '' };
-      } catch (err: any) {
-        result = { output: `Error creating file: ${err.message}`, error: err.message };
+      const fullPath = resolveProjectFilePath(filename, safeWorkingDir, projectDir);
+
+      if (!fullPath) {
+        result = { output: 'Invalid file path', error: 'Invalid path' };
+      } else {
+        try {
+          await writeFile(fullPath, '', 'utf-8');
+          result = { output: `File created: ${toClientCwd(fullPath, projectDir)}`, error: '' };
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Unknown touch error';
+          result = { output: `Error creating file: ${message}`, error: message };
+        }
       }
-      
     } else if (trimmed.startsWith('rm ') || trimmed.startsWith('del ')) {
-      // Delete file
-      const filename = trimmed.startsWith('rm ') 
+      const filename = trimmed.startsWith('rm ')
         ? trimmed.substring(3).trim()
         : trimmed.substring(4).trim();
-      const fullPath = path.join(projectDir, filename);
-      
-      if (await exists(fullPath)) {
+      const fullPath = resolveProjectFilePath(filename, safeWorkingDir, projectDir);
+
+      if (fullPath && (await exists(fullPath))) {
         try {
           await unlink(fullPath);
           result = { output: `File deleted: ${filename}`, error: '' };
-        } catch (err: any) {
-          result = { output: `Error deleting file: ${err.message}`, error: err.message };
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Unknown delete error';
+          result = { output: `Error deleting file: ${message}`, error: message };
         }
       } else {
-        result = { output: `File not found: ${filename}`, error: `File not found` };
+        result = { output: `File not found: ${filename}`, error: 'File not found' };
       }
-      
     } else if (trimmed === 'clear' || trimmed === 'cls') {
-      // Clear terminal (simulated)
       result = { output: '[Terminal cleared]', error: '' };
-      
     } else if (trimmed === 'help') {
-      // Show help
       const helpText = `Available commands:
   help                    - Show this help
   clear / cls            - Clear terminal
-  ls / dir               - List files
-  python <filename.py>   - Run Python file
-  node <filename.js>     - Run Node.js file
-  cd <directory>         - Change directory
+  ls / dir               - List files in current directory
+  python <filename.py>   - Run Python file (relative to cwd)
+  node <filename.js>     - Run Node.js file (relative to cwd)
+  cd [directory]         - Change directory (.., ., ~ supported)
   pwd                    - Print working directory
   cat <filename>         - Show file contents
   mkdir <name>           - Create directory
@@ -254,37 +267,30 @@ export async function POST(request: NextRequest) {
   rm <filename>          - Delete file
   echo <text>            - Print text
   date                   - Show current date/time
-  
-Real terminal with server-side execution.`;
+
+Commands run in the current working directory shown in the prompt.`;
       result = { output: helpText, error: '' };
-      
     } else if (trimmed.startsWith('echo ')) {
-      // Echo command
-      const text = trimmed.substring(5);
-      result = { output: text, error: '' };
-      
+      result = { output: trimmed.substring(5), error: '' };
     } else if (trimmed === 'date' || trimmed === 'time') {
-      // Date/time command
-      const now = new Date();
-      result = { output: now.toLocaleString(), error: '' };
-      
+      result = { output: new Date().toLocaleString(), error: '' };
     } else {
-      // Try to execute as shell command
       result = await executeShellCommand(trimmed, safeWorkingDir);
     }
-    
+
     return NextResponse.json({
       success: true,
       output: result.output,
-      error: result.error
+      error: result.error,
+      cwd: toClientCwd(nextWorkingDir, projectDir),
     });
-    
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown terminal error';
     console.error('Terminal execute error:', error);
     return NextResponse.json({
       success: false,
-      output: `Error: ${error.message}`,
-      error: error.message
+      output: `Error: ${message}`,
+      error: message,
     });
   }
 }

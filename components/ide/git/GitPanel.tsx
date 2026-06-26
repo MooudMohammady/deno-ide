@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Minus, Plus } from "lucide-react";
 
 interface GitFileStatus {
   path: string;
@@ -93,10 +94,10 @@ export default function GitPanel({
                 setNewBranch("");
               }
             }}
-            className="text-xs px-2 py-0.5 rounded text-blue-400 hover:bg-blue-400/10"
+            className="rounded px-2 py-0.5 text-blue-400 hover:bg-blue-400/10"
             aria-label="Create branch"
           >
-            +
+            <Plus className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
@@ -110,10 +111,10 @@ export default function GitPanel({
             <span className="flex-1 truncate">{f.path}</span>
             <button
               onClick={() => onUnstage(f.path)}
-              className="opacity-50 hover:opacity-100 text-xs"
+              className="opacity-50 hover:opacity-100"
               aria-label={`Unstage ${f.path}`}
             >
-              −
+              <Minus className="h-3.5 w-3.5" />
             </button>
           </div>
         ))}
@@ -126,10 +127,10 @@ export default function GitPanel({
             <span className="flex-1 truncate">{f.path}</span>
             <button
               onClick={() => onStage(f.path)}
-              className="opacity-50 hover:opacity-100 text-xs"
+              className="opacity-50 hover:opacity-100"
               aria-label={`Stage ${f.path}`}
             >
-              +
+              <Plus className="h-3.5 w-3.5" />
             </button>
           </div>
         ))}
@@ -144,10 +145,10 @@ export default function GitPanel({
                 <span className="flex-1 truncate">{f}</span>
                 <button
                   onClick={() => onStage(f)}
-                  className="opacity-50 hover:opacity-100 text-xs"
+                  className="opacity-50 hover:opacity-100"
                   aria-label={`Stage ${f}`}
                 >
-                  +
+                  <Plus className="h-3.5 w-3.5" />
                 </button>
               </div>
             ))}

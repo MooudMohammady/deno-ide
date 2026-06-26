@@ -1,6 +1,7 @@
 "use client";
 
 import type { LintDiagnostic } from "@/lib/linting";
+import { AlertCircle, AlertTriangle, Info } from "lucide-react";
 
 interface ProblemsPanelProps {
   diagnostics: Record<string, LintDiagnostic[]>;
@@ -23,9 +24,9 @@ export default function ProblemsPanel({
   const entries = Object.entries(diagnostics).filter(([, diags]) => diags.length > 0);
 
   const severityIcon = (s: LintDiagnostic["severity"]) => {
-    if (s === "error") return <span className="text-red-400">✕</span>;
-    if (s === "warning") return <span className="text-yellow-400">⚠</span>;
-    return <span className="text-blue-400">ℹ</span>;
+    if (s === "error") return <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-400" />;
+    if (s === "warning") return <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-yellow-400" />;
+    return <Info className="h-3.5 w-3.5 shrink-0 text-blue-400" />;
   };
 
   return (
